@@ -1,0 +1,22 @@
+{
+  "name": "feishu-agent-bridge",
+  "version": "1.0.0",
+  "description": "Connect any AI agent to Feishu / Lark: scan-to-create bot, long-connection receive, webhook wake, localhost send API.",
+  "type": "module",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/hetao950205/feishu-agent-bridge.git" },
+  "keywords": ["feishu", "lark", "bot", "ai-agent", "webhook", "bridge"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "register": "node register.mjs",
+    "start": "./start.sh",
+    "stop": "./stop.sh",
+    "check": "node --check lib.mjs && node --check register.mjs && node --check bot.mjs"
+  },
+  "dependencies": {
+    "@larksuite/channel": "^0.7.1",
+    "@larksuite/vercel-chat-adapter": "^0.3.0",
+    "@larksuiteoapi/node-sdk": "^1.74.0",
+    "qrcode": "^1.5.4"
+  }
+}

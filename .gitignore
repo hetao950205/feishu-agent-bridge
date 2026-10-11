@@ -1,0 +1,15 @@
+node_modules/
+.env
+.env.*
+!.env.example
+inbox.jsonl
+*.log
+*.out
+*.pid
+acked.json
+owner-open-id.txt
+register-status.json
+qr-url.txt
+*.png
+*.tmp
+downloads/
