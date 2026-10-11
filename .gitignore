@@ -13,3 +13,4 @@ qr-url.txt
 *.png
 *.tmp
 downloads/
+catchup-state.json

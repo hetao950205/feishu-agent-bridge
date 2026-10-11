@@ -5,6 +5,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { LarkChannel } from "@larksuite/channel";
+import { createCatchUp } from "./catchup.mjs";
 import { DIR, addSecret, localIso, makeLogger, readEnvFile } from "./lib.mjs";
 
 const log = makeLogger("bot.log");
@@ -60,12 +61,22 @@ const ALLOWED_FILE_DIRS = [
     .filter(Boolean),
 ];
 
+// Wrap the logger to detect "keepalive wake-up" (host slept) and trigger catch-up
+let catchUp = null;
+const chLog = {
+  ...log,
+  info: (...a) => {
+    log.info(...a);
+    if (JSON.stringify(a).includes("keepalive wake-up")) setTimeout(() => catchUp?.trigger("wake-up"), 15_000);
+  },
+};
+
 const channel = new LarkChannel({
   appId: APP_ID,
   appSecret: APP_SECRET,
   transport: "websocket",
   ...(domain ? { domain } : {}),
-  logger: log,
+  logger: chLog,
   source: "feishu-agent-bridge",
   resolveSenderNames: true,
   policy: { dmMode: "open", requireMention: true, respondToMentionAll: false },
@@ -112,8 +123,11 @@ async function wake(record) {
   }
 }
 
-channel.on({
-  message: async (msg) => {
+async function handleInbound(msg, { catchUp: isCatchUp = false } = {}) {
+    if (!isCatchUp) {
+      if (catchUp?.isProcessed(msg.messageId)) return log.info(`skip already-processed ${msg.messageId}`);
+      catchUp?.markProcessed(msg.messageId, msg.chatId, Number(msg.createTime) || Date.now());
+    }
     stats.received++;
     lastInboundAt = localIso();
     const record = {
@@ -134,6 +148,7 @@ channel.on({
       text: msg.content,
       mentionedBot: msg.mentionedBot,
       resources: msg.resources?.length ? msg.resources : undefined,
+      ...(isCatchUp ? { catchUp: true } : {}),
     };
 
     const allow = allowlist();
@@ -170,7 +185,10 @@ channel.on({
     }
 
     await wake(record);
-  },
+}
+
+channel.on({
+  message: (msg) => handleInbound(msg),
   reject: (evt) => log.debug?.("策略拒绝:", evt),
   botAdded: (evt) => log.info(`机器人被拉入群 ${evt.chatId}（操作人 ${evt.operator?.openId}）`),
   error: (err) => log.error(`channel 错误 [${err?.code}]: ${err?.message}`),
@@ -178,6 +196,7 @@ channel.on({
   reconnected: () => {
     connectedAt = localIso();
     log.info("长连接已恢复");
+    setTimeout(() => catchUp?.trigger("reconnected"), 3_000);
   },
 });
 
@@ -243,6 +262,7 @@ const server = http.createServer(async (req, res) => {
         lastInboundAt,
         allowlist: allowlist(),
         wakeConfigured: !!env("FEISHU_WAKE_URL"),
+        catchUp: catchUp?.stats() ?? null,
         stats,
         pid: process.pid,
       });
@@ -367,3 +387,18 @@ for (let attempt = 1; ; attempt++) {
     await new Promise((r) => setTimeout(r, wait));
   }
 }
+
+catchUp = createCatchUp({
+  appId: APP_ID,
+  appSecret: APP_SECRET,
+  domain,
+  dir: DIR,
+  log,
+  inboxFile: INBOX,
+  extraChats: (env("FEISHU_CATCHUP_CHATS", "") || "").split(",").map((s) => s.trim()),
+  handle: handleInbound,
+  getBotOpenId: () => channel.getBotIdentity()?.openId,
+  intervalMs: Number(env("FEISHU_CATCHUP_INTERVAL_MS", "120000")),
+  firstRunWindowMs: Number(env("FEISHU_CATCHUP_FIRST_RUN_HOURS", "6")) * 3600_000,
+});
+catchUp.trigger("startup");

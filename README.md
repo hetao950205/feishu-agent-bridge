@@ -14,6 +14,7 @@
 - **本机接口**（只绑定 `127.0.0.1`）：`POST /send`（Markdown 文本 / 文件 / 图片 / 引用回复）、`POST /download`、`GET /health`
 - **安全守护**：`run-loop.sh` 崩溃自动重启；`stop.sh` 只停止自己记录的 PID，不会误杀其他进程
 - 日志自动对密钥脱敏
+- **休眠补拉（catch-up）**：主机休眠 / 断线期间飞书不会重推事件。启动、重连、`keepalive wake-up` 时以及每 2 分钟，用 `im/v1/messages` 拉取各会话的新消息，走与实时消息完全相同的流程（`catchUp: true`），按消息 ID 去重；首次最多回溯 6 小时
 
 ## 架构
 
@@ -71,6 +72,9 @@ curl -s http://127.0.0.1:8787/health      # ok: true 即已连接
 | `FEISHU_ALLOWED_FILE_DIRS` | `/send` 可读取的额外目录 | 本目录 + `/tmp` |
 | `FEISHU_QR_PNG` | 二维码 PNG 路径 | `./feishu-qr.png` |
 | `REGISTER_MAX_ROUNDS` | 二维码过期自动重发轮数 | `6` |
+| `FEISHU_CATCHUP_CHATS` | 额外补拉的会话 chat_id（逗号分隔，如主人私聊）；另会自动用 inbox.jsonl 里的会话和 `im/v1/chats` 列表 | 空 |
+| `FEISHU_CATCHUP_INTERVAL_MS` | 补拉间隔 | `120000` |
+| `FEISHU_CATCHUP_FIRST_RUN_HOURS` | 首次补拉回溯小时数 | `6` |
 | `NODE_BIN` | `run-loop.sh` 使用的 Node bin 目录 | 系统 PATH |
 
 ## 入站消息格式
@@ -133,6 +137,7 @@ curl -s http://127.0.0.1:8787/health
 | 现象 / 需求 | 需要的 scope |
 |---|---|
 | 读群信息报 `99991672` | `im:chat`、`im:chat:readonly`、`im:chat.group_info:readonly`、`im:chat.members:read` |
+| 补拉私聊 / 群聊历史消息（休眠补拉） | `im:message`（私聊）、`im:message.group_msg`（群聊，缺了报 `230027`，只记录一次警告） |
 | 发文件 / 图片 | `im:resource` |
 | 创建飞书云文档（readonly / write_only 不够） | `docx:document:create` |
 | 给文档加协作者 / 转交所有权 | `docs:permission.member:create`、`docs:permission.member:transfer`、`docs:permission.member:retrieve` |
@@ -159,6 +164,7 @@ curl -s http://127.0.0.1:8787/health
 |---|---|
 | `register.mjs` | 扫码创建应用，写入凭据 |
 | `bot.mjs` | 长连接收消息、Webhook 唤醒、本机 HTTP 接口 |
+| `catchup.mjs` | 休眠 / 断线后补拉漏掉的消息，状态存 `catchup-state.json` |
 | `lib.mjs` | 日志（脱敏）、`.env` 读写 |
 | `send.sh` | `/send` 命令行封装 |
 | `start.sh` / `stop.sh` / `run-loop.sh` | 启动、按 PID 停止、守护重启 |
@@ -173,6 +179,7 @@ curl -s http://127.0.0.1:8787/health
 - `./start.sh` – connects over a WebSocket long connection (no public URL needed). Every DM or group @-mention is appended to `inbox.jsonl` and optionally POSTed to `FEISHU_WAKE_URL` (key sent in a configurable header, default `Authorization: Bearer <key>`).
 - Your agent replies through the localhost-only API: `POST 127.0.0.1:8787/send` (markdown text, file, image, `replyTo`), `POST /download`, `GET /health`, or the `send.sh` wrapper.
 - `FEISHU_ALLOWED_OPEN_IDS` marks owners; other senders are flagged `guestMode: true` so your agent can help them without exposing the owner's private data.
+- Sleep / catch-up: if the host sleeps, the WebSocket drops and Feishu does not redeliver events. `catchup.mjs` lists recent messages per chat (`im/v1/messages`) on startup, reconnect, `keepalive wake-up` and every 2 minutes, dedupes by message id, and feeds them through the same pipeline with `catchUp: true` (first run looks back 6 hours). Needs `im:message` / `im:message.group_msg`.
 - Never expose the port, never commit `.env`. Common missing scopes: `im:chat*` (error 99991672), `docx:document:create`, `docs:permission.member:*`, `application:application:patch` (publish a new version after changes).
 
 Agent prompt template: [`docs/agent-prompt.md`](docs/agent-prompt.md). License: MIT.
